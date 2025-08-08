@@ -1,71 +1,69 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Spotify Show Capture</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
+  <meta charset="UTF-8">
+  <title>WFMU Playlist Capture</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.4/socket.io.min.js"></script>
 </head>
 <body class="bg-light p-4">
 <div class="container">
-    <h1 class="mb-4">Spotify Show Capture</h1>
+  <h1 class="mb-4">WFMU Playlist Capture</h1>
 
-    <div class="card p-3 mb-4 shadow-sm">
-        <label for="show_id" class="form-label">Enter Spotify URL or Show Number</label>
-        <input type="text" id="show_id" class="form-control mb-3" placeholder="https://open.spotify.com/show/ABC123 or 12345">
-        <button id="startBtn" class="btn btn-primary">Start Capture</button>
-    </div>
+  <div class="card p-3 mb-4 shadow-sm">
+    <label for="wfmu_url" class="form-label">Enter WFMU playlist URL</label>
+    <input type="text" id="wfmu_url" class="form-control mb-3"
+           placeholder="https://wfmu.org/playlists/shows/154876">
+    <button id="startBtn" class="btn btn-primary">Start</button>
+  </div>
 
-    <div id="output" class="card p-3 shadow-sm" style="display:none;">
-        <h5>Results:</h5>
-        <pre id="results" class="bg-dark text-light p-3 rounded" style="height:300px; overflow-y:auto;"></pre>
-    </div>
+  <div id="output" class="card p-3 shadow-sm" style="display:none;">
+    <h5>Results:</h5>
+    <pre id="results" class="bg-dark text-light p-3 rounded" style="height:300px; overflow-y:auto;"></pre>
+  </div>
 
-    <div id="errorBox" class="alert alert-danger mt-3" style="display:none;"></div>
-    <div id="doneBox" class="alert alert-success mt-3" style="display:none;">✅ Capture complete!</div>
+  <div id="errorBox" class="alert alert-danger mt-3" style="display:none;"></div>
+  <div id="doneBox" class="alert alert-success mt-3" style="display:none;">✅ Done!</div>
 </div>
 
 <script>
-document.addEventListener("DOMContentLoaded", function () {
-    const socket = io();
-    const startBtn = document.getElementById("startBtn");
-    const showIdInput = document.getElementById("show_id");
-    const resultsBox = document.getElementById("results");
-    const outputDiv = document.getElementById("output");
-    const errorBox = document.getElementById("errorBox");
-    const doneBox = document.getElementById("doneBox");
+document.addEventListener("DOMContentLoaded", () => {
+  const socket    = io();
+  const startBtn  = document.getElementById("startBtn");
+  const urlInput  = document.getElementById("wfmu_url");
+  const resultsEl = document.getElementById("results");
+  const outCard   = document.getElementById("output");
+  const errBox    = document.getElementById("errorBox");
+  const doneBox   = document.getElementById("doneBox");
 
-    startBtn.addEventListener("click", function () {
-        const showId = showIdInput.value.trim();
-        resultsBox.textContent = "";
-        errorBox.style.display = "none";
-        doneBox.style.display = "none";
+  startBtn.addEventListener("click", () => {
+    const url = urlInput.value.trim();
+    resultsEl.textContent = "";
+    errBox.style.display = "none";
+    doneBox.style.display = "none";
 
-        if (!showId) {
-            errorBox.textContent = "❌ Please enter a valid Show ID or URL.";
-            errorBox.style.display = "block";
-            return;
-        }
+    if (!/^https?:\/\//i.test(url)) {
+      errBox.textContent = "Please enter a valid WFMU URL.";
+      errBox.style.display = "block";
+      return;
+    }
 
-        outputDiv.style.display = "block";
-        resultsBox.textContent = "Fetching tracks...\n";
+    outCard.style.display = "block";
+    resultsEl.textContent = "Fetching playlist...\n";
+    socket.emit("start_wfmu", { url });
+  });
 
-        socket.emit("start_playlist", { show_id: showId });
-    });
+  socket.on("track", (data) => {
+    resultsEl.textContent += data.line + "\n";
+    resultsEl.scrollTop = resultsEl.scrollHeight;
+  });
 
-    socket.on("track", function (data) {
-        resultsBox.textContent += data.line + "\n";
-        resultsBox.scrollTop = resultsBox.scrollHeight;
-    });
+  socket.on("error", (data) => {
+    errBox.textContent = data.message || "An error occurred.";
+    errBox.style.display = "block";
+  });
 
-    socket.on("error", function (data) {
-        errorBox.textContent = data.message;
-        errorBox.style.display = "block";
-    });
-
-    socket.on("done", function () {
-        doneBox.style.display = "block";
-    });
+  socket.on("done", () => { doneBox.style.display = "block"; });
 });
 </script>
 </body>

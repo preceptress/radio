@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """
 capture.py — WFMU playlist scraper (CLI + stream-friendly)
-- Input: WFMU playlist URL (e.g. https://wfmu.org/playlists/shows/154876)
-- Output: prints each track line-by-line so a Socket.IO listener can stream it.
+
+Usage:
+  python capture.py https://wfmu.org/playlists/shows/154876
+  # or just: python capture.py   (it will prompt)
+
+Behavior:
+  - Scrapes a WFMU playlist page
+  - Cleans titles: removes anything after '→', quotes, and (...) parts
+  - Keeps artist + title format
+  - Skips "Music behind DJ" and other non-track rows
+  - Prints clean results, line-by-line, for CLI or Socket.IO streaming
 """
 
 import sys
 import time
+import re
 import requests
 from bs4 import BeautifulSoup
 
@@ -14,70 +24,102 @@ UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
+REQ_TIMEOUT = 20
+
+# --- Helpers ---------------------------------------------------------------
 
 def fetch_html(url: str) -> str:
-    resp = requests.get(url, headers={"User-Agent": UA}, timeout=20)
+    resp = requests.get(url, headers={"User-Agent": UA}, timeout=REQ_TIMEOUT)
     resp.raise_for_status()
     return resp.text
 
-def text(el):
+def text(el) -> str:
     return (el.get_text(" ", strip=True) if el else "").strip()
 
+def clean_title(title: str) -> str:
+    """Clean track title for display."""
+    if "→" in title:
+        title = title.split("→", 1)[0]
+    title = title.replace('"', "").replace("“", "").replace("”", "")
+    title = re.sub(r"\(.*?\)", "", title)  # remove (content)
+    title = re.sub(r"\s+", " ", title)     # collapse spaces
+    return title.strip(" -–—\u2013\u2014").strip()
+
+def should_skip(artist: str, title: str) -> bool:
+    """Skip background, filler, or empty rows."""
+    a = (artist or "").lower().strip(": ")
+    t = (title or "").lower()
+
+    if not t:
+        return True
+
+    if a.startswith("music behind dj") or "behind dj" in a:
+        return True
+
+    bad_terms = [
+        "station id", "id break", "underwriting", "psa",
+        "news", "traffic", "weather", "promo", "ad break",
+        "mic break", "dj break", "talk break"
+    ]
+    if any(term in a for term in bad_terms) or any(term in t for term in bad_terms):
+        return True
+
+    if a.startswith("music behind dj") and "today in history" in t:
+        return True
+
+    return False
+
+# --- Parsing ---------------------------------------------------------------
+
 def parse_tracks(html: str):
-    """
-    Try multiple common WFMU playlist layouts.
-    Returns a list of dicts like {"artist": "...", "title": "...", "extra": "..."}
-    """
     soup = BeautifulSoup(html, "html.parser")
     tracks = []
 
-    # 1) Table-based playlists with header columns (Artist / Title / etc.)
-    tables = soup.select("table, .playlist, #playlist, .songtable")
-    for tbl in tables:
-        # find header mapping
+    # 1) Table with header columns
+    for tbl in soup.select("table, .playlist, #playlist, .songtable"):
         headers = [text(th).lower() for th in tbl.select("tr th")]
-        if headers:
-            try:
-                a_idx = next(i for i, h in enumerate(headers) if "artist" in h or "performer" in h)
-            except StopIteration:
-                a_idx = None
-            try:
-                t_idx = next(i for i, h in enumerate(headers) if "title" in h or "song" in h or "track" in h)
-            except StopIteration:
-                t_idx = None
+        if not headers:
+            continue
 
-            if a_idx is not None or t_idx is not None:
-                for tr in tbl.select("tr"):
-                    tds = tr.find_all("td")
-                    if not tds:
-                        continue
-                    artist = text(tds[a_idx]) if a_idx is not None and a_idx < len(tds) else ""
-                    title  = text(tds[t_idx]) if t_idx is not None and t_idx < len(tds) else ""
-                    if artist or title:
-                        tracks.append({"artist": artist, "title": title, "extra": ""})
+        def idx_of(*candidates):
+            for i, h in enumerate(headers):
+                if any(c in h for c in candidates):
+                    return i
+            return None
+
+        a_idx = idx_of("artist", "performer")
+        t_idx = idx_of("title", "song", "track")
+        if a_idx is None and t_idx is None:
+            continue
+
+        for tr in tbl.select("tr"):
+            tds = tr.find_all("td")
+            if not tds:
+                continue
+            artist = text(tds[a_idx]) if a_idx is not None and a_idx < len(tds) else ""
+            title  = text(tds[t_idx]) if t_idx is not None and t_idx < len(tds) else ""
+            if artist or title:
+                tracks.append({"artist": artist, "title": title})
 
     if tracks:
         return tracks
 
-    # 2) Cell-by-cell classes often used on WFMU pages
-    # e.g. <td class="playlist_artist">, <td class="playlist_song">
-    rows = []
+    # 2) Class-based selectors
     artists = soup.select(".playlist_artist, .artist")
     titles  = soup.select(".playlist_song, .song, .title, .track")
     if artists and titles and len(artists) == len(titles):
-        for a_el, t_el in zip(artists, titles):
-            rows.append({"artist": text(a_el), "title": text(t_el), "extra": ""})
-    if rows:
-        return rows
+        return [{"artist": text(a), "title": text(t)} for a, t in zip(artists, titles)]
 
-    # 3) Fallback: items grouped in rows with both artist/title inside
+    # 3) Fallback
+    rows = []
     for row in soup.select(".playlist_row, .songrow, .trackrow, tr"):
         a_el = row.select_one(".playlist_artist, .artist")
         t_el = row.select_one(".playlist_song, .song, .title, .track")
         if a_el or t_el:
-            tracks.append({"artist": text(a_el), "title": text(t_el), "extra": ""})
+            rows.append({"artist": text(a_el), "title": text(t_el)})
+    return rows
 
-    return tracks
+# --- Main ------------------------------------------------------------------
 
 def capture_wfmu(url: str):
     print(f"🎙 Fetching playlist from {url}...")
@@ -87,24 +129,28 @@ def capture_wfmu(url: str):
         print(f"❌ Error fetching URL: {e}")
         return
 
-    tracks = parse_tracks(html)
-
-    if not tracks:
-        print("⚠️ No tracks found — the page structure may differ. "
-              "Try updating selectors in capture.py.")
+    raw_tracks = parse_tracks(html)
+    if not raw_tracks:
+        print("⚠️ No tracks found — page structure may have changed.")
         return
 
-    print(f"✅ Found {len(tracks)} tracks:")
-    # stream-friendly: print one line at a time
-    for i, tr in enumerate(tracks, 1):
-        artist = tr.get("artist", "")
-        title  = tr.get("title", "")
-        extra  = tr.get("extra", "")
-        line = f"{i:02d}. {artist} — {title}".strip(" —")
-        if extra:
-            line += f" ({extra})"
-        print(line, flush=True)
-        time.sleep(0.01)  # tiny delay helps front-ends show gradual updates
+    cleaned = []
+    for row in raw_tracks:
+        artist = (row.get("artist") or "").strip()
+        title  = clean_title((row.get("title") or "").strip())
+        if should_skip(artist, title):
+            continue
+        if artist or title:
+            cleaned.append(f"{artist} — {title}")
+
+    if not cleaned:
+        print("⚠️ No valid tracks after filtering.")
+        return
+
+    print(f"✅ Found {len(cleaned)} tracks:")
+    for i, line in enumerate(cleaned, 1):
+        print(f"{i:02d}. {line}", flush=True)
+        time.sleep(0.01)  # helps streaming front-ends
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
