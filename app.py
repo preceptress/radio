@@ -1,50 +1,41 @@
-from flask import Flask, render_template
-from flask_socketio import SocketIO, emit
-import subprocess, shlex
+from flask import Flask, render_template, request
+import re
+from capture import scrape_and_match  # uses the patched capture.py you have
 
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*")  # tighten later if you want
 
-@app.route("/", methods=["GET"])
+WFMU_RE = re.compile(r"^https?://(www\.)?wfmu\.org/playlists/shows/\d+$")
+
+def normalize_wfmu_input(raw: str) -> str | None:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return f"https://wfmu.org/playlists/shows/{raw}"
+    if WFMU_RE.match(raw):
+        return raw
+    return None
+
+@app.route("/", methods=["GET", "POST"])
 def index():
-    return render_template("index.html")
+    error = None
+    items = []
+    submitted = False
 
-@socketio.on("start_wfmu")
-def start_wfmu(data):
-    """
-    Spawn capture.py with a WFMU playlist URL and stream stdout lines to client.
-    """
-    url = (data or {}).get("url", "").strip()
-    if not (url.startswith("http://") or url.startswith("https://")):
-        emit("error", {"message": "Please enter a valid WFMU URL."})
-        return
-
-    try:
-        # Use shlex.split to be safe with paths
-        cmd = shlex.split(f"python3 capture.py {url}")
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,           # line-buffered
-        )
-
-        # Stream stdout
-        for line in proc.stdout:
-            emit("track", {"line": line.rstrip()})
-
-        proc.wait()
-
-        if proc.returncode == 0:
-            emit("done")
+    if request.method == "POST":
+        submitted = True
+        url = normalize_wfmu_input(request.form.get("url_or_show"))
+        if not url:
+            error = "Please enter a valid WFMU URL or numeric show ID."
         else:
-            err = (proc.stderr.read() or "Unknown error").strip()
-            emit("error", {"message": err})
+            data = scrape_and_match(url)
+            if data.get("error"):
+                error = data["error"]
+            else:
+                items = data.get("items", [])
 
-    except Exception as e:
-        emit("error", {"message": f"Exception: {e}"})
+    return render_template("index.html", items=items, error=error, submitted=submitted)
 
 if __name__ == "__main__":
-    # dev only; prod uses gunicorn --worker-class eventlet
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+    # dev only; prod uses gunicorn
+    app.run(host="0.0.0.0", port=5000, debug=True)

@@ -1,4 +1,4 @@
-#!/home/chief/music/venv/bin/python3
+#!/home/chief/wfmu/venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys

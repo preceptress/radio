@@ -1,6 +1,13 @@
-flask
-flask-socketio
+cd /home/chief/wfmu
+cat > requirements.txt <<'EOF'
+Flask
+gunicorn
 spotipy
 python-dotenv
-eventlet
-gunicorn
+requests
+beautifulsoup4
+EOF
+
+source venv/bin/activate
+python -m pip install -r requirements.txt
+deactivate
