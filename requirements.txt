@@ -1,0 +1,6 @@
+flask
+flask-socketio
+spotipy
+python-dotenv
+eventlet
+gunicorn
